@@ -4,12 +4,34 @@ Ruby client, worker, push receiver and ActiveJob-style jobs for
 [Orch8](https://orch8.io), the self-hosted durable workflow engine.
 
 - **Zero runtime dependencies.** Only stdlib `net/http`, `json` and `openssl`.
-- **Ruby >= 3.1.** Tested on 3.1, 3.3 and 4.0.
-- **Protocol-conformant worker.** Passes all 17 scenarios of the
-  `sdk-contract` conformance kit (`WORKER_PROTOCOL.md`).
+- **Ruby >= 3.1.** CI runs the test suite on 3.1, 3.2, 3.3 and 3.4.
+- **Protocol-conformant worker.** Passes all 17 scenarios of the Orch8 SDK
+  conformance kit (worker wire protocol, contract version 1). The kit is not
+  public yet, so conformance runs are local-only; CI runs the unit tests.
+
+## Install
+
+Not on RubyGems yet. Today, install from the git tag with Bundler:
 
 ```ruby
-gem "orch8", path: "../sdk-ruby"   # not published to RubyGems yet
+# Gemfile
+gem "orch8", git: "https://github.com/orch8-io/sdk-ruby", tag: "v0.1.0"
+```
+
+or download `orch8-0.1.0.gem` from the
+[v0.1.0 GitHub release](https://github.com/orch8-io/sdk-ruby/releases/tag/v0.1.0)
+and install it directly:
+
+```bash
+gh release download v0.1.0 -R orch8-io/sdk-ruby -p '*.gem'
+gem install ./orch8-0.1.0.gem
+```
+
+Once published to RubyGems (the release workflow pushes the gem when the
+`RUBYGEMS_API_KEY` repository secret is set):
+
+```ruby
+gem "orch8", "~> 0.1"
 ```
 
 ## Client
@@ -240,7 +262,7 @@ payload and the job's `queue_name` and `priority`. `set(wait:)` and
 
 ```bash
 rake test          # minitest; no network, uses an in-process fake engine
-rake conformance   # sdk-contract kit (needs Node >= 20 and ../sdk-contract)
+rake conformance   # local only: needs Node >= 20 and the non-public ../sdk-contract checkout
 # or directly:
 node ../sdk-contract/conformance/run.mjs --adapter "$PWD/bin/conformance"
 ```
