@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build gem, GitHub Release, RubyGems
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - name: Check tag matches gem version
+        run: |
+          version=$(ruby -Ilib -e 'require "orch8/version"; print Orch8::VERSION')
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match Orch8::VERSION ${version}"
+            exit 1
+          fi
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+      - name: Test
+        run: bundle exec rake test
+      - name: Build gem
+        run: |
+          mkdir dist
+          gem build orch8.gemspec --output "dist/orch8-${VERSION}.gem"
+          (cd dist && sha256sum * > SHA256SUMS)
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
+      - name: Publish to RubyGems (skipped without RUBYGEMS_API_KEY)
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          if [ -z "${GEM_HOST_API_KEY}" ]; then
+            echo "::notice::RUBYGEMS_API_KEY not configured; skipping RubyGems publish."
+            exit 0
+          fi
+          gem push "dist/orch8-${VERSION}.gem"
