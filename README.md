@@ -6,8 +6,8 @@ Ruby client, worker, push receiver and ActiveJob-style jobs for
 - **Zero runtime dependencies.** Only stdlib `net/http`, `json` and `openssl`.
 - **Ruby >= 3.1.** CI runs the test suite on 3.1, 3.2, 3.3 and 3.4.
 - **Protocol-conformant worker.** Passes all 17 scenarios of the Orch8 SDK
-  conformance kit (worker wire protocol, contract version 1). The kit is not
-  public yet, so conformance runs are local-only; CI runs the unit tests.
+  conformance kit ([orch8-io/sdk-contract](https://github.com/orch8-io/sdk-contract), worker wire protocol, contract version 1).
+  CI runs the unit tests; conformance runs from a checkout of the kit.
 
 ## Install
 
@@ -262,7 +262,7 @@ payload and the job's `queue_name` and `priority`. `set(wait:)` and
 
 ```bash
 rake test          # minitest; no network, uses an in-process fake engine
-rake conformance   # local only: needs Node >= 20 and the non-public ../sdk-contract checkout
+rake conformance   # needs Node >= 20 and github.com/orch8-io/sdk-contract cloned to ../sdk-contract
 # or directly:
 node ../sdk-contract/conformance/run.mjs --adapter "$PWD/bin/conformance"
 ```
