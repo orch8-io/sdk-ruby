@@ -1,0 +1,224 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Orch8 SDK conformance adapter (sdk-contract/conformance/README.md).
+# Usage: bin/conformance <worker|push|verify|client>
+#
+# Implemented strictly on top of the gem's public API.
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "orch8"
+require "json"
+require "socket"
+
+$stdout.sync = true
+ENV_ = ENV
+
+def env_int(name, default)
+  v = ENV_[name]
+  v.nil? || v.empty? ? default : Integer(v, 10)
+end
+def env_str(name) = (v = ENV_[name]).nil? || v.empty? ? nil : v
+
+# ---------------------------------------------------------------------------
+# Standard handlers
+# ---------------------------------------------------------------------------
+
+def register_standard_handlers(worker)
+  worker.register("echo") { |task| { "echo" => task.params } }
+  worker.register("fail_retryable") do |task|
+    raise Orch8::RetryableError, (task.params.is_a?(Hash) && task.params["message"]) || "boom"
+  end
+  worker.register("fail_permanent") { |_task| raise Orch8::NonRetryableError, "fatal" }
+  worker.register("crash") { |_task| raise "crash" }
+  worker.register("checkpoint") do |task|
+    params = task.params.is_a?(Hash) ? task.params : {}
+    resume = task.resume_checkpoint
+    start = resume.is_a?(Hash) ? resume.fetch("step", 0).to_i : 0
+    steps = params.fetch("steps", 3).to_i
+    ((start + 1)..steps).each { |i| task.checkpoint("step" => i) }
+    { "resumed_from" => start, "final_step" => steps }
+  end
+  worker.register("slow") do |task|
+    ms = (task.params.is_a?(Hash) && task.params["sleep_ms"]) || 1000
+    task.sleep(ms / 1000.0)
+    { "slept" => ms }
+  end
+  worker
+end
+
+def build_worker
+  Orch8::Worker.new(
+    base_url: ENV_.fetch("ORCH8_BASE_URL"),
+    api_key: env_str("ORCH8_API_KEY"),
+    tenant_id: env_str("ORCH8_TENANT_ID"),
+    worker_id: env_str("ORCH8_WORKER_ID"),
+    concurrency: env_int("ORCH8_CONCURRENCY", 4),
+    poll_interval: env_int("ORCH8_POLL_INTERVAL_MS", 100) / 1000.0,
+    shutdown_timeout: env_int("ORCH8_SHUTDOWN_TIMEOUT_MS", 10_000) / 1000.0,
+    queue: env_str("ORCH8_QUEUE"),
+    version: env_str("ORCH8_WORKER_VERSION")
+  )
+end
+
+# ---------------------------------------------------------------------------
+# worker mode
+# ---------------------------------------------------------------------------
+
+def run_worker
+  worker = register_standard_handlers(build_worker)
+  worker.run(signals: %w[TERM INT])
+  exit(0)
+end
+
+# ---------------------------------------------------------------------------
+# push mode: a minimal HTTP/1.1 server (stdlib TCPServer) in front of the
+# gem's Rack-compatible Orch8::Push::Receiver.
+# ---------------------------------------------------------------------------
+
+class TinyRackServer
+  def initialize(app, port)
+    @app = app
+    @server = TCPServer.new("0.0.0.0", port)
+  end
+
+  def serve
+    loop do
+      sock = @server.accept
+      Thread.new(sock) { |s| handle(s) }
+    end
+  rescue IOError, Errno::EBADF
+    nil
+  end
+
+  def close = @server.close
+
+  private
+
+  def handle(sock)
+    request_line = sock.gets("\r\n")
+    return unless request_line
+
+    method, target, = request_line.split(" ", 3)
+    headers = {}
+    while (line = sock.gets("\r\n")) && line != "\r\n"
+      name, value = line.split(":", 2)
+      headers[name.strip.downcase] = value.to_s.strip
+    end
+    body = sock.read(headers["content-length"].to_i) || ""
+    env = {
+      "REQUEST_METHOD" => method, "PATH_INFO" => target.to_s.split("?").first, "rack.input" => StringIO.new(body.b),
+      "CONTENT_TYPE" => headers["content-type"], "CONTENT_LENGTH" => body.bytesize.to_s
+    }
+    headers.each { |k, v| env["HTTP_#{k.upcase.tr('-', '_')}"] = v }
+    status, resp_headers, resp_body = @app.call(env)
+    payload = resp_body.to_a.join
+    head = +"HTTP/1.1 #{status} X\r\ncontent-length: #{payload.bytesize}\r\nconnection: close\r\n"
+    resp_headers.each { |k, v| head << "#{k}: #{v}\r\n" }
+    sock.write("#{head}\r\n#{payload}")
+  rescue StandardError => e
+    warn "push server error: #{e.class}: #{e.message}"
+  ensure
+    sock.close
+  end
+end
+
+def run_push
+  require "stringio"
+  worker = register_standard_handlers(build_worker)
+  worker.start(poll: false)
+  receiver = Orch8::Push::Receiver.new(worker: worker, secret: ENV_.fetch("ORCH8_PUSH_SECRET"),
+                                       tolerance: env_int("ORCH8_PUSH_TOLERANCE_SECS", 300))
+  server = TinyRackServer.new(receiver, Integer(ENV_.fetch("ORCH8_PUSH_PORT")))
+  rd, wr = IO.pipe
+  %w[TERM INT].each { |sig| Signal.trap(sig) { wr.write_nonblock(".", exception: false) } }
+  Thread.new { server.serve }
+  puts "READY"
+  rd.read(1)
+  server.close
+  worker.stop
+  exit(0)
+end
+
+# ---------------------------------------------------------------------------
+# verify mode
+# ---------------------------------------------------------------------------
+
+def run_verify
+  $stdin.each_line do |line|
+    next if line.strip.empty?
+
+    v = JSON.parse(line)
+    valid = Orch8::Push.verify(secret: v["secret"], timestamp: v["timestamp"], signature: v["signature"],
+                               body: v["body"].encode("UTF-8").b, now: v["now"],
+                               tolerance: v["tolerance_secs"] || Orch8::Push::DEFAULT_TOLERANCE)
+    puts JSON.generate("valid" => valid)
+  end
+end
+
+# ---------------------------------------------------------------------------
+# client mode
+# ---------------------------------------------------------------------------
+
+def client_op(client, op, a)
+  case op
+  when "sequences.create" then client.sequences.create(a["body"])
+  when "sequences.get" then client.sequences.get(a["id"])
+  when "sequences.list" then client.sequences.list(a["query"] || {})
+  when "instances.create" then client.instances.create(a["body"])
+  when "instances.get" then client.instances.get(a["id"])
+  when "instances.list" then client.instances.list(a["query"] || {})
+  when "instances.signal" then client.instances.signal(a["id"], a["signal_type"], a["payload"])
+  when "instances.cancel" then client.instances.cancel(a["id"])
+  when "jobs.enqueue" then enqueue_job(client, a["body"])
+  when "jobs.get" then client.jobs.get(a["id"])
+  when "jobs.list" then client.jobs.list(a["query"] || {})
+  when "jobs.cancel" then client.jobs.cancel(a["id"])
+  else raise ArgumentError, "unknown op #{op}"
+  end
+end
+
+# Exercise the keyword API (the typed surface users call).
+def enqueue_job(client, body)
+  opts = body.reject { |k, _| %w[handler payload].include?(k) }.to_h { |k, v| [k.to_sym, v] }
+  client.jobs.enqueue(body["handler"], body["payload"], **opts)
+end
+
+def to_json_value(value)
+  case value
+  when Orch8::Resource then value.to_h
+  when Array then value.map { |v| to_json_value(v) }
+  else value
+  end
+end
+
+def run_client
+  client = Orch8::Client.new(
+    base_url: ENV_.fetch("ORCH8_BASE_URL"), api_key: env_str("ORCH8_API_KEY"), tenant_id: env_str("ORCH8_TENANT_ID"),
+    max_attempts: env_int("ORCH8_MAX_ATTEMPTS", 3), retry_base_delay: env_int("ORCH8_RETRY_BASE_DELAY_MS", 20) / 1000.0
+  )
+  $stdin.each_line do |line|
+    next if line.strip.empty?
+
+    req = JSON.parse(line)
+    out = begin
+      { "id" => req["id"], "ok" => true, "result" => to_json_value(client_op(client, req["op"], req["args"] || {})) }
+    rescue Orch8::APIError => e
+      { "id" => req["id"], "ok" => false,
+        "error" => { "kind" => e.kind, "status" => e.status, "code" => e.code, "message" => e.message } }
+    rescue Orch8::TransportError => e
+      { "id" => req["id"], "ok" => false, "error" => { "kind" => "transport", "status" => nil, "code" => nil, "message" => e.message } }
+    rescue StandardError => e
+      { "id" => req["id"], "ok" => false, "error" => { "kind" => "api", "status" => nil, "code" => nil, "message" => "#{e.class}: #{e.message}" } }
+    end
+    puts JSON.generate(out)
+  end
+end
+
+MODES = { "worker" => :run_worker, "push" => :run_push, "verify" => :run_verify, "client" => :run_client }.freeze
+mode = ARGV[0]
+unless MODES.key?(mode)
+  warn "usage: #{$PROGRAM_NAME} <#{MODES.keys.join('|')}>"
+  exit 2
+end
+send(MODES[mode])
