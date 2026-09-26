@@ -16,5 +16,10 @@ Gem::Specification.new do |spec|
 
   spec.files = Dir["lib/**/*.rb", "README.md", "LICENSE"]
   spec.require_paths = ["lib"]
-  spec.metadata = { "rubygems_mfa_required" => "true" }
+  spec.metadata = {
+    "rubygems_mfa_required" => "true",
+    "source_code_uri" => "https://github.com/orch8-io/sdk-ruby",
+    "bug_tracker_uri" => "https://github.com/orch8-io/sdk-ruby/issues",
+    "changelog_uri" => "https://github.com/orch8-io/sdk-ruby/releases"
+  }
 end
