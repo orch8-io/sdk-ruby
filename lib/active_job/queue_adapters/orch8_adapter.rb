@@ -47,8 +47,6 @@ module ActiveJob
 
       def client = @client || Orch8.client
 
-      def enqueue_after_transaction_commit? = true
-
       def enqueue(job)
         submit(job)
       end

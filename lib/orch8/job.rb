@@ -40,7 +40,10 @@ module Orch8
       def registry = (@registry ||= [])
 
       # Registers every known job class (or the given ones) on a worker.
-      def register_all(worker, classes = Job.registry) = classes.each { |klass| worker.register_jobs(klass) }
+      def register_all(worker, classes = Job.registry)
+        classes.select { |k| k.name || k.instance_variable_defined?(:@handler_name) }
+               .each { |klass| worker.register_jobs(klass) }
+      end
 
       def queue_as(name = nil, &block)
         @queue_name = block || name&.to_s

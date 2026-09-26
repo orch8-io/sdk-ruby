@@ -50,6 +50,7 @@ module Orch8
         when Hash then value.each_with_object({}) { |(k, v), out| out[k.to_s] = plain(v) }
         when Array then value.map { |v| plain(v) }
         when Symbol then value.to_s
+        when Time then rfc3339(value)
         else value
         end
       end

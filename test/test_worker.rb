@@ -286,3 +286,11 @@ class WorkerTest < Minitest::Test
     assert_raises(Orch8::ConfigurationError) { worker(concurrency: 0) }
   end
 end
+
+class WorkerClaimTest < Minitest::Test
+  def test_claim_requires_started_worker
+    w = Orch8::Worker.new(base_url: "http://127.0.0.1:9/api/v1", logger: NullLogger.new)
+    w.register("x") { {} }
+    assert_raises(Orch8::Error) { w.claim(handler_name: "x", queue_name: "q") }
+  end
+end

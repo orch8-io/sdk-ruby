@@ -199,6 +199,8 @@ module Orch8
     #
     # @return [Hash] the poll response ("tasks", "poll_after_ms", ...)
     def claim(handler_name:, queue_name: @queue, limit: @concurrency)
+      raise Error, "start the worker first (worker.start(poll: false))" unless running?
+
       poll_once(handler_name.to_s, queue_name, limit)
     end
 

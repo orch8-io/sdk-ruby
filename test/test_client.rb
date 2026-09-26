@@ -221,3 +221,11 @@ class ClientTest < Minitest::Test
     assert_raises(Orch8::ConfigurationError) { Orch8::Client.new(base_url: "not a url") }
   end
 end
+
+class UtilTest < Minitest::Test
+  def test_plain_converts_symbols_times_and_resources
+    t = Time.utc(2026, 1, 2, 3, 4, 5)
+    got = Orch8::Client::Util.plain(a: :b, at: t, r: Orch8::Resource.new("x" => 1), list: [:c])
+    assert_equal({ "a" => "b", "at" => "2026-01-02T03:04:05Z", "r" => { "x" => 1 }, "list" => ["c"] }, got)
+  end
+end
